@@ -1,0 +1,422 @@
+<!-- Auteur: GAEL FORTIER. Tous droits réservés. 13 septembre 2025 -->
+
+<!DOCTYPE html> 
+<html>
+	<script>
+		//--------------------------------------- [classes] ---------------------------------------
+		class Stop {
+			stopInfo;
+
+			constructor(stopInfo) {
+				this.stopInfo = stopInfo;
+			}
+
+			code() {
+				return this.stopInfo.stop_code;
+			}
+
+			id() {
+				return this.stopInfo.stop_id;
+			}
+
+			name() {
+				return this.stopInfo.stop_name;
+			}
+
+			wheelchairBoarding() {
+				return this.stopInfo.wheelchair_boarding == "1"
+			}
+
+			zone() {
+				return this.stopInfo.zone_id;
+			}
+		}
+
+		class StopTime {
+			stopobj;
+			stopTimeInfo;
+
+			constructor(stopTimeInfo, stopobj) {
+				this.stopTimeInfo = stopTimeInfo;
+				this.stopobj = stopobj;
+			}
+
+			stop() {
+				return this.stopobj;
+			}
+
+			arrival() {
+				return this.stopTimeInfo.arrival_time;
+			}
+
+			departure() {
+				return this.stopTimeInfo.departure_time;
+			}
+
+			dropOffType() {
+				return this.stopTimeInfo.drop_off_type;
+			}
+
+			pickupType() {
+				return this.stopTimeInfo.pickup_type;
+			}
+
+			sequence() {
+				return this.stopTimeInfo.stop_sequence;
+			}
+
+			stopId() {
+				return this.stopTimeInfo.stop_id;
+			}
+		}
+
+		class Trip {
+			stopTimeObjs;
+			tripInfo;
+			serviceInfo;
+
+			constructor(tripInfo, stopTimeObjs, serviceInfo) {
+				this.stopTimeObjs = stopTimeObjs;
+				this.tripInfo = tripInfo;
+				this.serviceInfo = serviceInfo;
+			}
+
+			stopTimes() {
+				return this.stopTimeObjs;
+			}
+
+			bikeAllowed() {
+				return this.tripInfo.bikes_allowed;
+			}
+
+			tripHeadSign() {
+				return this.tripInfo.trip_headsign;
+			}
+
+			wheelchairAccessible() {
+				return this.tripInfo.wheelchair_accessible;
+			}
+
+			directionId() {
+				return this.tripInfo.direction_id;
+			}
+		}
+
+		class Route {
+			directions;
+			routeInfo;
+
+			constructor(routeInfo, directions) {
+				this.directions = directions;
+				this.routeInfo = routeInfo;
+			}
+
+			name() {
+				return this.routeInfo.route_long_name;
+			}
+
+			id() {
+				return this.routeInfo.route_short_name;
+			}
+
+			color() {
+				return this.routeInfo.route_color;
+			}
+
+			textColor() {
+				return this.routeInfo.route_text_color;
+			}
+		}
+
+		// --------------------------------------- [data] ---------------------------------------
+		let gtfsObjs = {};
+		let gtfsLinks = {};
+		let selectedRouteObj = {};
+		const primaryKeys = {
+			agency: ["agency_id"],
+			routes: ["route_id"],
+			trips: ["trip_id"],
+			stop_times: ["trip_id", "stop_sequence"],
+			stops: ["stop_id"],
+			calendar: ["service_id"],
+			calendar_dates: ["service_id", "date"],
+			fare_rules: ["fare_id", "route_id"],
+			fare_attributes: ["fare_id"],
+			feed_info: ["feed_publisher_name"],
+			shapes: ["shape_id"]
+		};
+
+		const foreignKeys = {
+			agency: [],
+			routes: ["agency_id"],
+			trips: ["service_id", "route_id"],
+			stop_times: ["stop_id", "trip_id"],
+			stops: [],
+			calendar: [],
+			calendar_dates: ["service_id"],
+			fare_rules: ["fare_id", "route_id"],
+			fare_attributes: [],
+			feed_info: [],
+			shapes: []
+		};
+
+		const days = [
+			"monday",
+			"tuesday",
+			"wednesday",
+			"thursday",
+			"friday",
+			"saturday",
+			"sunday"
+		];
+
+		// --------------------------------------- [gtfs functions] ---------------------------------------
+		function getDayServedLiteral(calendar) {
+			let literal = "";
+			for(const d of days) {
+				literal += calendar[d];
+			}
+			return literal;
+		}
+
+		function buildRouteStructure(routeNumber) {
+			let directions = new Map();
+			const ROUTE_TRIPS = gtfsLinks.trips.route_id.get(routeNumber);
+			for(const TRIP of ROUTE_TRIPS) {
+				let stopTimes = new Map();
+				const TRIP_INFO = gtfsObjs.trips.get(TRIP);
+				const TRIP_STOP_TIME = gtfsLinks.stop_times.trip_id.get(TRIP);
+				let TRIP_DIRECTION = TRIP_INFO.direction_id;
+				for(const STOP_TIME of TRIP_STOP_TIME) {
+					const STOP_TIME_INFO = gtfsObjs.stop_times.get(STOP_TIME);
+					const STOP_INFO = gtfsObjs.stops.get(STOP_TIME_INFO.stop_id);
+					const STOP_OBJ = new Stop(STOP_INFO);
+					const STOP_TIME_OBJ = new StopTime(STOP_TIME_INFO, STOP_OBJ);
+					stopTimes.set(STOP_TIME, STOP_TIME_OBJ);
+				}
+				const CALENDAR_INFO = gtfsObjs.calendar.get(TRIP_INFO.service_id);
+				const TRIP_OBJ = new Trip(TRIP_INFO, stopTimes, CALENDAR_INFO);
+				const DAYS_SERVED = getDayServedLiteral(CALENDAR_INFO);
+
+				switch(DAYS_SERVED) {
+					case "0000010":
+						TRIP_DIRECTION += "-sam";
+						break;
+					case "0000001":
+						TRIP_DIRECTION += "-dim";
+						break;
+					case "0000011":
+						TRIP_DIRECTION += "-sam-dim";
+						break;
+					default:
+						TRIP_DIRECTION += "-semaine";
+						break;
+				}
+
+				if(directions.has(TRIP_DIRECTION)) {
+					directions.get(TRIP_DIRECTION).push(TRIP_OBJ);
+				}
+				else {
+					directions.set(TRIP_DIRECTION, [TRIP_OBJ]);
+				}
+			}
+			const ROUTE_INFO = gtfsObjs.routes.get(routeNumber);
+			const ROUTE_OBJ = new Route(ROUTE_INFO, directions);
+			return ROUTE_OBJ;
+		}
+
+		function generateScheduleTable(routeObject) {
+			let stopsList = [];
+			routeObject.directions.forEach(function(value, key, map) {
+				const TRIPOBJS = value;
+				let stops = {
+					list: new Map(),
+					direction: key,
+				};
+
+				TRIPOBJS.forEach(function(value, key, map) {
+					const TRIP = value;
+					TRIP.stopTimeObjs.forEach(function(value, key, map) {
+						const STOP_TIME = value;
+						const STOP_TIME_ID = key.split(",");
+						const STOP_INFO = {
+							tripID: STOP_TIME_ID[0],
+							tripNb: TRIP.tripInfo.trip_short_name,
+							order: STOP_TIME_ID[1],
+							name: STOP_TIME.stopobj.name(),
+							code: STOP_TIME.stopobj.code(),
+							time: STOP_TIME.arrival(),
+							serviceInfo: TRIP.serviceInfo
+						};
+						const ID = STOP_INFO.name + "," + STOP_INFO.order;
+						if(stops.list.has(ID)) {
+							stops.list.get(ID).push(STOP_INFO);
+						}
+						else {
+							stops.list.set(ID, [STOP_INFO]);
+						}
+					});
+				});
+				stopsList.push(stops);
+			});
+
+			return stopsList;
+		}
+
+		// --------------------------------------- [loaders] ---------------------------------------
+
+		function loadCSVRow(headers, line) {
+			if(headers.length != line.length) {
+				return null;
+			}
+
+			let row = {};
+			for(let i = 0; i < headers.length; i++) {
+				row[headers[i]] = line[i].replace("\r", "");
+			}
+			return row;
+		}
+
+		function loadCSVRowKey(row, keys) {
+			let key = "";
+			for(const k of keys) {
+				if(key == "") {
+					key = row[k];
+				}
+				else {
+					key = key + "," + row[k];
+				}
+			}
+			return key;
+		}
+
+		function loadCSVFile(fileName, text) {
+			let table = new Map();
+			const lines = text.split("\n");
+			const cols = lines[0].split(",");
+			
+			for(let i = 1; i < lines.length; i++) {
+				if(lines[i] === "") {
+					continue;
+				}
+				const values = lines[i].split(",");
+				const row = loadCSVRow(cols, values);
+				const pk = loadCSVRowKey(row, primaryKeys[fileName]);
+				table.set(pk, row);
+			}
+			
+			return table;
+		}
+
+		function loadCSVLinks(fileName, table) {
+			const selectedForeignKeys = foreignKeys[fileName];
+			const selectedTable = table;
+
+			// TODO:
+			// filename: Map<string, array<obj>>
+
+			let links = {};
+			for(const fk of selectedForeignKeys) {
+				links[fk] = new Map();
+				selectedTable.forEach(function(value, key, map) {
+					const foreignK = value[fk];
+					if(links[fk].has(foreignK)) {
+						links[fk].get(foreignK).push(key);
+					}
+					else {
+						links[fk].set(foreignK, [key]);
+					}
+				});
+			}
+
+			return links;
+		}
+
+		// --------------------------------------- [event handlers] ---------------------------------------
+
+		function loadBtnClick() {
+			gtfsObjs = {};
+			let ldgtfs = document.getElementById("ldgtfs");
+			for(const file of ldgtfs.files) {
+				let fileReader = new FileReader();
+				fileReader.addEventListener("load", function() {
+					const fileName = file.name.split(".")[0];
+					const table = loadCSVFile(fileName, fileReader.result);
+					const links = loadCSVLinks(fileName, table);
+					console.log(fileName);
+					gtfsObjs[fileName] = table;
+					gtfsLinks[fileName] = links;
+				}, false);
+				fileReader.readAsText(file);
+			}
+			let loadStatus = document.getElementById("loadStatus");
+			loadStatus.textContent = "chargé";
+		}
+		
+		function srchBtnClick() {
+			let rtsrch = document.getElementById("rtsrch");
+			let routeNumber = rtsrch.value;
+			let routeStatus = document.getElementById("routeStatus");
+
+
+			if(!gtfsObjs.routes.has(routeNumber)) {
+				routeStatus.textContent = "Pas trouvé.";
+				return;
+			}
+			else {
+				routeStatus.textContent = "Trouvé.";
+			}
+
+			const ROUTE_OBJ = buildRouteStructure(routeNumber);
+			console.log(ROUTE_OBJ);
+			page_route_setText(ROUTE_OBJ.id() + " " + ROUTE_OBJ.name());
+			const r = generateScheduleTable(ROUTE_OBJ);
+			console.log(r);
+			page_scheduleTable_setData(r);
+		}
+
+		// --------------------------------------- [html forms] ---------------------------------------
+		function page_route_setText(text) {
+			let html_route = document.getElementById("route");
+			html_route.textContent = text;
+		}
+
+		function page_scheduleTable_setData(directions) {
+			let tagDiv = "<div>"
+			for(const dir of directions) {
+				let tagTable = `<p>${dir.direction}</p><table border=1 style='font-size:70%'>`;
+				dir.list.forEach(function(value, key, map) {
+					const row = value;
+					let tagRow = `<tr><td>${key.split(",")[0]}</td>`;
+					for(const stopTime of row) {
+						const timeParts = stopTime.time.split(":");
+						const formatedTime = timeParts[0] + ":" + timeParts[1];
+						let tagCell = `<td>${formatedTime}</td>`;
+						tagRow += tagCell;
+					}
+					tagRow += "</tr>"
+					tagTable += tagRow;
+				})
+				tagTable += "</table><p/>"
+				tagDiv += tagTable;
+			}
+			tagDiv += "</div>";
+			let scheduleTable = document.getElementById("scheduleTable");
+			scheduleTable.innerHTML = tagDiv;
+		}
+
+	</script>
+	
+	<body>
+		<input id="ldgtfs" type="file" multiple/>
+		<button id="ldbtn" onclick="loadBtnClick()"> load </button>
+		<p id="loadStatus">Pas chargé</p>
+		<p/>
+		<input id="rtsrch" type="text"/> 
+		<button id="srchbtn" onclick="srchBtnClick()"> search </button>
+		<p id="routeStatus">...</p>
+		<p/>
+		<p id="route"/>
+		<div id="scheduleTable"></div>
+	</body>
+</html>
